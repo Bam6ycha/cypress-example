@@ -1,0 +1,84 @@
+name: Cypress Tests
+on:
+  pull_request:
+  push:
+    branches: '**'
+
+jobs:
+  start-rp-launch:
+    runs-on: ubuntu-latest
+    outputs:
+      rp_launch_id: ${{ steps.rp_launch.outputs.rp_launch_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start launch and set it to output
+        id: rp_launch
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const startLaunch = require('./scripts/startLaunch.js');
+            const launchId = await startLaunch();
+  
+            core.setOutput('rp_launch_id', launchId);
+
+  cypress-run:
+    runs-on: ubuntu-latest
+    container: cypress/browsers:node-18.16.0-chrome-114.0.5735.133-1-ff-114.0.2-edge-114.0.1823.51-1
+    needs: [start-rp-launch]
+    strategy:
+      fail-fast: false # https://github.com/cypress-io/github-action/issues/48
+      matrix:
+        containers: [1, 2] # Uses 2 parallel instances
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Cypress run
+        uses: cypress-io/github-action@59810ebfa5a5ac6fcfdcfdf036d1cd4d083a88f2
+        with:
+          config-file: cypress.config.js
+          group: 'UI Tests - Chrome'
+          start: npx cypress run --record --parallel
+          record: true
+          parallel: true # Runs test in parallel using settings above
+          ci-build-id: buildId
+
+        env:
+          RP_LAUNCH_ID: ${{ needs.start-rp-launch.outputs.rp_launch_id }}
+          CI_BUILD_ID: ${{ github.sha }}-${{ github.run_id }}
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  finish-rp-launch:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [start-rp-launch, cypress-run]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Finish RP launch
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const finishLaunch = require('./scripts/finishLaunch.js');
+            await finishLaunch();
+        env:
+          RP_LAUNCH_ID: ${{ needs.start-rp-launch.outputs.rp_launch_id }}
